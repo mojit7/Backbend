@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"github.com/mojit7/Backbend/internal/config"
 	"github.com/mojit7/Backbend/internal/httpserver"
 	"github.com/mojit7/Backbend/internal/platform/postgres"
+	"github.com/mojit7/Backbend/migrations"
 )
 
 func main() {
@@ -41,6 +43,17 @@ func run() error {
 				log.Printf("closing database: %v", cerr)
 			}
 		}()
+
+		// Migrations run once at startup, never per request.
+		migCtx, migCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		applied, err := postgres.Migrate(migCtx, db.DB, migrations.FS)
+		migCancel()
+		if err != nil {
+			return fmt.Errorf("running database migrations: %w", err)
+		}
+		if applied > 0 {
+			log.Printf("applied %d database migration(s)", applied)
+		}
 	}
 
 	srv := httpserver.New(cfg.Addr, db)
