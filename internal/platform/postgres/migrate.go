@@ -10,10 +10,15 @@ import (
 	"regexp"
 	"sort"
 	"strconv"
+	"time"
 )
 
 // migrationFilePattern matches versioned migration files like "00001_name.up.sql".
 var migrationFilePattern = regexp.MustCompile(`^([0-9]+)_([a-z0-9_]+)\.up\.sql$`)
+
+// migrationLockKey is the advisory-lock key serializing Migrate across
+// multiple instances of the application sharing one database.
+const migrationLockKey = 728854
 
 // Migration is a single parsed SQL migration file.
 type Migration struct {
@@ -72,13 +77,33 @@ func ParseMigrations(fsys fs.FS) ([]Migration, error) {
 // state. Already-applied migrations are skipped after verifying their
 // checksum matches the applied record; editing or deleting an applied
 // migration is an error. It returns the number of newly applied migrations.
-// Errors identify the offending migration but never include connection
-// details or credentials.
+// A PostgreSQL advisory lock is held for the whole run so concurrent
+// instances serialize instead of racing. Errors identify the offending
+// migration but never include connection details or credentials.
 func Migrate(ctx context.Context, db *sql.DB, fsys fs.FS) (int, error) {
 	ms, err := ParseMigrations(fsys)
 	if err != nil {
 		return 0, err
 	}
+
+	// Advisory locks are session-scoped, so hold the lock on one dedicated
+	// pooled connection for the entire run; closing it releases the session.
+	lockConn, err := db.Conn(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("migrate: acquiring migration lock connection: %w", err)
+	}
+	defer lockConn.Close()
+
+	if _, err := lockConn.ExecContext(ctx, `SELECT pg_advisory_lock($1)`, migrationLockKey); err != nil {
+		return 0, fmt.Errorf("migrate: acquiring migration lock: %w", err)
+	}
+	defer func() {
+		// Best effort unlock with a fresh context; the session-level lock is
+		// also released automatically if the connection or process dies.
+		unlockCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = lockConn.ExecContext(unlockCtx, `SELECT pg_advisory_unlock($1)`, migrationLockKey)
+	}()
 
 	if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
 		version    bigint PRIMARY KEY,

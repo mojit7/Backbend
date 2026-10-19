@@ -154,6 +154,83 @@ func TestMigrateRejectsEditedAppliedMigration(t *testing.T) {
 	}
 }
 
+func TestMigrateHoldsAdvisoryLockDuringRun(t *testing.T) {
+	db := openTestDB(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Acquire the lock ourselves first; Migrate must block until we
+	// release it, proving it takes (and waits on) the same advisory lock.
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		t.Fatalf("getting connection: %v", err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock($1)`, migrationLockKey); err != nil {
+		t.Fatalf("pg_advisory_lock failed: %v", err)
+	}
+
+	migDone := make(chan error, 1)
+	go func() {
+		// Include migrations applied by earlier tests (shared test database).
+		_, err := Migrate(ctx, db.DB, embeddedPlus(fstest.MapFS{
+			"90001_tamper.up.sql": &fstest.MapFile{Data: []byte(tamperSQL)},
+		}))
+		migDone <- err
+	}()
+
+	// Migrate must be blocked while we hold the lock. Give it a moment, then
+	// confirm it has not completed.
+	select {
+	case err := <-migDone:
+		if err == nil {
+			t.Fatal("Migrate() completed while advisory lock was held elsewhere, want it to block")
+		}
+		t.Fatalf("Migrate() returned error while waiting for lock: %v", err)
+	case <-time.After(200 * time.Millisecond):
+		// Still blocked: expected.
+	}
+
+	// Release the lock; Migrate should now finish successfully.
+	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_unlock($1)`, migrationLockKey); err != nil {
+		t.Fatalf("pg_advisory_unlock failed: %v", err)
+	}
+	select {
+	case err := <-migDone:
+		if err != nil {
+			t.Fatalf("Migrate() after lock release failed: %v", err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("Migrate() did not finish after advisory lock was released")
+	}
+}
+
+func TestMigrateReleasesAdvisoryLock(t *testing.T) {
+	db := openTestDB(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if _, err := Migrate(ctx, db.DB, embeddedPlus(fstest.MapFS{
+		"90001_tamper.up.sql": &fstest.MapFile{Data: []byte(tamperSQL)},
+	})); err != nil {
+		t.Fatalf("Migrate() failed: %v", err)
+	}
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		t.Fatalf("getting connection: %v", err)
+	}
+	defer conn.Close()
+
+	var acquired bool
+	if err := conn.QueryRowContext(ctx, `SELECT pg_try_advisory_lock($1)`, migrationLockKey).Scan(&acquired); err != nil {
+		t.Fatalf("pg_try_advisory_lock failed: %v", err)
+	}
+	if !acquired {
+		t.Fatal("advisory lock still held after Migrate returned, want released")
+	}
+	_, _ = conn.ExecContext(ctx, `SELECT pg_advisory_unlock($1)`, migrationLockKey)
+}
+
 func TestMigrateRejectsMissingAppliedMigration(t *testing.T) {
 	db := openTestDB(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
