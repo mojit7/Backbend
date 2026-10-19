@@ -172,7 +172,10 @@ func TestMigrateHoldsAdvisoryLockDuringRun(t *testing.T) {
 
 	migDone := make(chan error, 1)
 	go func() {
-		_, err := Migrate(ctx, db.DB, migrations.FS)
+		// Include migrations applied by earlier tests (shared test database).
+		_, err := Migrate(ctx, db.DB, embeddedPlus(fstest.MapFS{
+			"90001_tamper.up.sql": &fstest.MapFile{Data: []byte(tamperSQL)},
+		}))
 		migDone <- err
 	}()
 
@@ -207,11 +210,11 @@ func TestMigrateReleasesAdvisoryLock(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if _, err := Migrate(ctx, db.DB, migrations.FS); err != nil {
+	if _, err := Migrate(ctx, db.DB, embeddedPlus(fstest.MapFS{
+		"90001_tamper.up.sql": &fstest.MapFile{Data: []byte(tamperSQL)},
+	})); err != nil {
 		t.Fatalf("Migrate() failed: %v", err)
 	}
-
-	// After Migrate returns, another session must be able to take the lock.
 	conn, err := db.Conn(ctx)
 	if err != nil {
 		t.Fatalf("getting connection: %v", err)
