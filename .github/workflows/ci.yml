@@ -52,7 +52,15 @@ jobs:
         env:
           # Ephemeral CI-only credentials, not real secrets.
           DATABASE_URL: postgres://store_test:store_test@localhost:5432/store_test?sslmode=disable
-        run: go test -v ./...
+        run: |
+          set -o pipefail
+          status=0
+          go test -v ./... 2>&1 | tee /tmp/gotest.log || status=1
+          if [ "$status" -ne 0 ]; then
+            grep -E '(^--- FAIL|^FAIL|^panic:|^[[:space:]]+--- FAIL|\.go:[0-9]+:)' /tmp/gotest.log | sort -u \
+              | while IFS= read -r line; do echo "::error::${line}"; done
+            exit 1
+          fi
 
       - name: go build
         run: go build ./...
