@@ -2,9 +2,10 @@ package config
 
 import (
 	"fmt"
-	"net"
 	"net/url"
 	"os"
+	"strconv"
+	"strings"
 )
 
 // Config holds runtime configuration loaded from the environment.
@@ -26,7 +27,7 @@ func Load() (*Config, error) {
 	if cfg.Addr == "" {
 		cfg.Addr = ":8080"
 	}
-	if _, err := net.SplitHostPort(cfg.Addr); err != nil {
+	if err := validateAddr(cfg.Addr); err != nil {
 		return nil, fmt.Errorf("config: invalid APP_ADDR %q: %w", cfg.Addr, err)
 	}
 
@@ -45,4 +46,24 @@ func Load() (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// validateAddr checks that addr is a plausible host:port listen address.
+// It does not guarantee the address is bindable; binding is verified at startup.
+func validateAddr(addr string) error {
+	i := strings.LastIndex(addr, ":")
+	if i < 0 {
+		return fmt.Errorf("missing port in address")
+	}
+	port := addr[i+1:]
+	if port == "" {
+		return fmt.Errorf("missing port in address")
+	}
+	if _, err := strconv.Atoi(port); err != nil {
+		return fmt.Errorf("invalid port %q: %w", port, err)
+	}
+	if n, err := strconv.Atoi(port); err == nil && (n < 1 || n > 65535) {
+		return fmt.Errorf("port %d out of range", n)
+	}
+	return nil
 }

@@ -32,11 +32,23 @@ func TestLoadCustomAddr(t *testing.T) {
 }
 
 func TestLoadInvalidAddr(t *testing.T) {
-	t.Setenv("APP_ADDR", "not-an-address")
-	t.Setenv("DATABASE_URL", "")
-
-	if _, err := Load(); err == nil {
-		t.Fatal("Load() with invalid APP_ADDR succeeded, want error")
+	cases := []struct {
+		name string
+		addr string
+	}{
+		{"no port", "not-an-address"},
+		{"empty port", "127.0.0.1:"},
+		{"non-numeric port", "127.0.0.1:http"},
+		{"port out of range", "127.0.0.1:99999"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("APP_ADDR", tc.addr)
+			t.Setenv("DATABASE_URL", "")
+			if _, err := Load(); err == nil {
+				t.Fatalf("Load() with APP_ADDR=%q succeeded, want error", tc.addr)
+			}
+		})
 	}
 }
 
@@ -59,7 +71,7 @@ func TestLoadInvalidDatabaseURL(t *testing.T) {
 		url  string
 	}{
 		{"unsupported scheme", "mysql://user:pass@localhost/store"},
-		{"unparseable", "://\x7f"},
+		{"missing scheme", "://localhost/store"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
