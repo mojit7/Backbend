@@ -13,6 +13,7 @@ import (
 
 	"github.com/mojit7/Backbend/internal/config"
 	"github.com/mojit7/Backbend/internal/httpserver"
+	"github.com/mojit7/Backbend/internal/platform/postgres"
 )
 
 func main() {
@@ -27,7 +28,22 @@ func run() error {
 		return err
 	}
 
-	srv := httpserver.New(cfg.Addr)
+	var db *postgres.DB
+	if cfg.DatabaseURL == "" {
+		log.Printf("DATABASE_URL not set; starting without a database (GET /readyz will report not_configured)")
+	} else {
+		db, err = postgres.Open(cfg.DatabaseURL)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			if cerr := db.Close(); cerr != nil {
+				log.Printf("closing database: %v", cerr)
+			}
+		}()
+	}
+
+	srv := httpserver.New(cfg.Addr, db)
 
 	errCh := make(chan error, 1)
 	go func() {

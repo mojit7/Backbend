@@ -12,6 +12,23 @@ permissions:
 jobs:
   ci:
     runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          # Ephemeral CI-only credentials, not real secrets.
+          POSTGRES_USER: store_test
+          POSTGRES_PASSWORD: store_test
+          POSTGRES_DB: store_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U store_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     steps:
       - uses: actions/checkout@v5
 
@@ -31,8 +48,11 @@ jobs:
       - name: go vet
         run: go vet ./...
 
-      - name: go test
-        run: go test ./...
+      - name: go test (unit + PostgreSQL integration)
+        env:
+          # Ephemeral CI-only credentials, not real secrets.
+          DATABASE_URL: postgres://store_test:store_test@localhost:5432/store_test?sslmode=disable
+        run: go test -v ./...
 
       - name: go build
         run: go build ./...
