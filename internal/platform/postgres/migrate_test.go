@@ -125,13 +125,18 @@ func TestMigrateAppliesEmbeddedMigrationsIdempotently(t *testing.T) {
 	}
 }
 
+// The integration tests below share one database and run in source order.
+// Because removing an applied migration is an error by design, every Migrate
+// call in a later test must include every migration applied by earlier tests.
+const tamperSQL = "CREATE TABLE tamper_probe (id int);"
+
 func TestMigrateRejectsEditedAppliedMigration(t *testing.T) {
 	db := openTestDB(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	original := embeddedPlus(fstest.MapFS{
-		"90001_tamper.up.sql": &fstest.MapFile{Data: []byte("CREATE TABLE tamper_probe (id int);")},
+		"90001_tamper.up.sql": &fstest.MapFile{Data: []byte(tamperSQL)},
 	})
 	if _, err := Migrate(ctx, db.DB, original); err != nil {
 		t.Fatalf("Migrate() failed: %v", err)
@@ -155,7 +160,8 @@ func TestMigrateRejectsMissingAppliedMigration(t *testing.T) {
 	defer cancel()
 
 	withProbe := embeddedPlus(fstest.MapFS{
-		"91001_gone.up.sql": &fstest.MapFile{Data: []byte("CREATE TABLE gone_probe (id int);")},
+		"90001_tamper.up.sql": &fstest.MapFile{Data: []byte(tamperSQL)},
+		"91001_gone.up.sql":   &fstest.MapFile{Data: []byte("CREATE TABLE gone_probe (id int);")},
 	})
 	if _, err := Migrate(ctx, db.DB, withProbe); err != nil {
 		t.Fatalf("Migrate() failed: %v", err)
